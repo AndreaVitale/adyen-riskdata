@@ -53,7 +53,11 @@ class RiskData {
         data.components = this.processDFPComponents(data.components);
 
         // return in base64
-        return Buffer.from(JSON.stringify(data)).toString('base64');
+        try {
+            return btoa(JSON.stringify(data));
+        } catch (e) {
+            return Buffer.from(JSON.stringify(data)).toString('base64');
+        }
     }
 
     dfValue() {
