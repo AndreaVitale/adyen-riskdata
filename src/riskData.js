@@ -6,6 +6,7 @@ class RiskData {
         userAgent,
         language,
         colorDepth,
+        pixelRatio,
         deviceMemory,
         hardwareConcurrency,
         width,
@@ -16,11 +17,12 @@ class RiskData {
         timezone,
         platform,
         cpuClass=undefined,
-        doNotTrack=null
+        doNotTrack=null,
     ) {
         this.userAgent = userAgent;
         this.language = language;
         this.colorDepth = colorDepth;
+        this.pixelRatio = pixelRatio;
         this.deviceMemory = deviceMemory;
         this.hardwareConcurrency = hardwareConcurrency;
         this.width = width;
@@ -41,6 +43,15 @@ class RiskData {
             persistentCookie: [],
             components: this.generateComponents()
         }
+
+        if (data.components.find(component => component.key === 'webgl').value === 'not supported') {
+            const webGLComponent = data.components.find(component => component.key === '');
+
+            delete webGLComponent.value;
+        }
+
+        data.components = this.processDFPComponents(data.components);
+
         // return in base64
         return Buffer.from(JSON.stringify(data)).toString('base64');
     }
@@ -50,7 +61,7 @@ class RiskData {
     }
 
     generateComponents() {
-        return this.processDFPComponents([
+        const components = [
             {
                 "key": "userAgent",
                 "value": this.userAgent
@@ -73,7 +84,7 @@ class RiskData {
             },
             {
                 "key": "pixelRatio",
-                "value": 2
+                "value": this.pixelRatio
             },
             {
                 "key": "hardwareConcurrency",
@@ -217,10 +228,11 @@ class RiskData {
             },
             {
                 "key": "webgl",
-                "value": "not available"
+                "value": this.generateWebGLFingerprint()
             },
             {
-                "key": "webglVendorAndRenderer"
+                "key": "webglVendorAndRenderer",
+                "value": this.fetchWebGLVendorAndRenderer()
             },
             {
                 "key": "adBlock",
@@ -287,7 +299,9 @@ class RiskData {
                     "id=;gid=;audiooutput;"
                 ]
             }
-        ])
+        ];
+
+        return components;
     }
 
     processDFPComponents(components) {
@@ -330,6 +344,136 @@ class RiskData {
         for (var d = ''; d.length < e - f.length; d += '0') {
         }
         return (d.concat(f));
+    }
+
+    fetchWebGLVendorAndRenderer() {
+        try {
+            if (!document) {
+                return undefined;
+            }
+        } catch (e) {
+            return undefined;
+        }
+
+        const canvas = document.createElement("canvas");
+        const webGL = canvas.getContext("webgl");
+
+        const debugInfo = webGL.getExtension("WEBGL_debug_renderer_info");
+        const vendor = webGL.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL);
+        const renderer = webGL.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+
+        return `${vendor}~${renderer}`;
+    }
+
+    generateWebGLFingerprint() {
+        try {
+            if (!document) {
+                return 'not supported';
+            }
+        } catch (e) {
+            return 'not-supported'
+        }
+
+        const canvas = document.createElement('canvas');
+        let webGL = null;
+
+        try {
+            webGL = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+        } catch (q) {
+            return this.padString('', 10);
+        }
+
+        if (webGL === undefined || webGL === null) {
+            return this.padString('', 10);
+        }
+
+        const components = [];
+        const padding1 = -0.7;
+        const padding2 = 0.7;
+        const padding3 = 0.2;
+        const ratio = webGL.canvas.width / webGL.canvas.height;
+
+        const transform = (i, b, c, a, d) => {
+            const points = new Float32Array([b, c, b, c - a * d, b + a, c - a * d, b, c, b + a, c, b + a, c - a * d]);
+            const buffer = i.createBuffer();
+            i.bindBuffer(i.ARRAY_BUFFER, buffer);
+            i.bufferData(i.ARRAY_BUFFER, points, i.STATIC_DRAW);
+            buffer.itemSize = 2;
+            buffer.numItems = points.length / buffer.itemSize;
+
+            const j = i.createProgram();
+            const g = i.createShader(i.VERTEX_SHADER);
+            const e = i.createShader(i.FRAGMENT_SHADER);
+
+            i.shaderSource(g, 'attribute vec2 attrVert;varying vec2 varyTexCoord;uniform vec2 unifOffset;void main(){varyTexCoord=attrVert+unifOffset;gl_Position=vec4(attrVert,0,1);}');
+            i.shaderSource(e, 'precision mediump float;varying vec2 varyTexCoord;void main() {gl_FragColor=vec4(varyTexCoord*0.55,0,1);}');
+            i.compileShader(g);
+            i.compileShader(e);
+            i.attachShader(j, g);
+            i.attachShader(j, e);
+            i.linkProgram(j);
+            i.useProgram(j);
+            j.vertexPosAttrib = i.getAttribLocation(j, 'attrVert');
+            j.offsetUniform = i.getUniformLocation(j, 'unifOffset');
+            i.enableVertexAttribArray(j.vertexPosArray);
+            i.vertexAttribPointer(j.vertexPosAttrib, buffer.itemSize, i.FLOAT, !1, 0, 0);
+            i.uniform2f(j.offsetUniform, 1, 1);
+            i.drawArrays(i.TRIANGLE_STRIP, 0, buffer.numItems);
+        }
+
+        const p = (parameters) => {
+            webGL.clearColor(0, 0.5, 0, 1);
+            webGL.enable(webGL.DEPTH_TEST);
+            webGL.depthFunc(webGL.LEQUAL);
+            webGL.clear(webGL.COLOR_BUFFER_BIT | webGL.DEPTH_BUFFER_BIT);
+
+            return parameters[0] + parameters[1];
+        }
+
+        try {
+            transform(webGL, padding1, padding2, padding3, ratio);
+            transform(webGL, padding1 + padding3, padding2 - padding3 * ratio, padding3, ratio);
+            transform(webGL, padding1 + padding3, padding2 - 2 * padding3 * ratio, padding3, ratio);
+            transform(webGL, padding1, padding2 - 2 * padding3 * ratio, padding3, ratio);
+            transform(webGL, padding1 - padding3, padding2 - 2 * padding3 * ratio, padding3, ratio);
+        } catch (q) {
+        }
+
+        if (webGL.canvas !== null) {
+            components.push(webGL.canvas.toDataURL() + "§");
+        }
+
+        try {
+            components.push(webGL.getParameter(webGL.RED_BITS));
+            components.push(webGL.getParameter(webGL.GREEN_BITS));
+            components.push(webGL.getParameter(webGL.BLUE_BITS));
+            components.push(webGL.getParameter(webGL.DEPTH_BITS));
+            components.push(webGL.getParameter(webGL.ALPHA_BITS));
+            components.push((webGL.getContextAttributes().antialias ? '1' : '0'));
+            components.push(p(webGL.getParameter(webGL.ALIASED_LINE_WIDTH_RANGE)));
+            components.push(p(webGL.getParameter(webGL.ALIASED_POINT_SIZE_RANGE)));
+            components.push(p(webGL.getParameter(webGL.MAX_VIEWPORT_DIMS)));
+            components.push(webGL.getParameter(webGL.MAX_COMBINED_TEXTURE_IMAGE_UNITS));
+            components.push(webGL.getParameter(webGL.MAX_CUBE_MAP_TEXTURE_SIZE));
+            components.push(webGL.getParameter(webGL.MAX_FRAGMENT_UNIFORM_VECTORS));
+            components.push(webGL.getParameter(webGL.MAX_RENDERBUFFER_SIZE));
+            components.push(webGL.getParameter(webGL.MAX_TEXTURE_IMAGE_UNITS));
+            components.push(webGL.getParameter(webGL.MAX_TEXTURE_SIZE));
+            components.push(webGL.getParameter(webGL.MAX_VARYING_VECTORS));
+            components.push(webGL.getParameter(webGL.MAX_VERTEX_ATTRIBS));
+            components.push(webGL.getParameter(webGL.MAX_VERTEX_TEXTURE_IMAGE_UNITS));
+            components.push(webGL.getParameter(webGL.MAX_VERTEX_UNIFORM_VECTORS));
+            components.push(webGL.getParameter(webGL.RENDERER));
+            components.push(webGL.getParameter(webGL.SHADING_LANGUAGE_VERSION));
+            components.push(webGL.getParameter(webGL.STENCIL_BITS));
+            components.push(webGL.getParameter(webGL.VENDOR));
+            components.push(webGL.getParameter(webGL.VERSION));
+            components.push(webGL.getSupportedExtensions().join(''));
+        } catch (q) {
+            return this.padString('', 10);
+        }
+
+        return components.join('');
     }
 
     generateFingerprint() {
